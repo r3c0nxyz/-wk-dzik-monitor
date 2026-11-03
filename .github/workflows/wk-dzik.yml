@@ -3,6 +3,14 @@ on:
   schedule:
     - cron: '7-57/10 * * * *'
   workflow_dispatch:
+    inputs:
+      mode:
+        description: 'Tryb sprawdzania'
+        type: choice
+        default: single
+        options:
+          - single
+          - series
   push:
     paths:
       - '.monitor/check-request.json'
@@ -14,7 +22,7 @@ concurrency:
 jobs:
   monitor:
     runs-on: ubuntu-latest
-    timeout-minutes: 8
+    timeout-minutes: 40
     steps:
       - name: Pobierz stan monitora
         uses: actions/checkout@v4
@@ -28,6 +36,8 @@ jobs:
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          MONITOR_MODE: ${{ inputs.mode || 'single' }}
+          MONITOR_EVENT: ${{ github.event_name }}
           SEND_TEST: ${{ github.event_name == 'workflow_dispatch' || github.event_name == 'push' }}
         run: |
           python - <<'PY'
@@ -38,6 +48,7 @@ jobs:
           import os
           import re
           import sys
+          import time
           import urllib.error
           import urllib.parse
           import urllib.request
@@ -469,7 +480,9 @@ jobs:
                    f"Odczytano {good}/{len(PAGES)} stron.\n"
                    + outcome
                    + ("\n\nProblemy:\n" + "\n".join(problems) if problems else "")
-                   + "\nPlan: co 10 minut; wykonanie może być opóźnione przez GitHub.")
+                   + ("\nSeria: sprawdzanie co 2 minuty przez 30 minut."
+                      if os.environ.get("MONITOR_MODE") == "series" else
+                      "\nPlan: co 10 minut; wykonanie może być opóźnione przez GitHub."))
               state["initialized"] = True
               state["last_check"] = now.isoformat()
               state["last_ok_count"] = good
@@ -480,6 +493,55 @@ jobs:
                       handle.write(f"Odczytano **{good}/3** stron. Czas: {now.isoformat()}\n\n")
                       handle.write("\n".join(problems) + "\n")
               return state
+          
+          
+          
+          def save_state(state):
+              STATE_PATH.parent.mkdir(exist_ok=True)
+              temp = STATE_PATH.with_suffix(".tmp")
+              temp.write_text(json.dumps(state, ensure_ascii=False, indent=2))
+              temp.replace(STATE_PATH)
+          
+          
+          def run_series(check, send=telegram, clock=time.monotonic, sleep=time.sleep,
+                         duration_seconds=1800, interval_seconds=120):
+              """Fixed start slots: immediately, then +2, +4, ... +28 minutes."""
+              started = clock()
+              count = 0
+              send("▶️ WK DZIK — rozpoczęto serię\nPrzez 30 minut sprawdzam strony co 2 minuty. "
+                   "Pierwszy odczyt teraz; kolejne wyniki, również bez zmian, wyślę na Telegram. "
+                   "Przy zmianach podam produkt i szczegóły.")
+              for slot in range(0, duration_seconds, interval_seconds):
+                  target = started + slot
+                  delay = target - clock()
+                  if delay > 0:
+                      sleep(delay)
+                  if clock() >= started + duration_seconds:
+                      break
+                  # Do not burst overdue checks after an unusually slow request.
+                  if clock() - target >= interval_seconds:
+                      continue
+                  check()
+                  count += 1
+              remaining = started + duration_seconds - clock()
+              if remaining > 0:
+                  sleep(remaining)
+              send(f"🏁 WK DZIK — seria zakończona\nWykonano {count} sprawdzeń w oknie 30 minut. "
+                   "Wyniki wysłano powyżej. Zakończono tryb co 2 minuty.")
+              return count
+          
+          
+          def requested_mode():
+              mode = os.environ.get("MONITOR_MODE", "single")
+              # A fresh check-request commit is the API-accessible trigger for chat commands.
+              # Dispatch and scheduled runs never reuse an earlier series request.
+              if os.environ.get("MONITOR_EVENT") == "push":
+                  request_path = Path(".monitor/check-request.json")
+                  if request_path.exists():
+                      mode = json.loads(request_path.read_text()).get("mode", "single")
+              if mode not in ("single", "series"):
+                  raise ValueError("Nieznany tryb monitora")
+              return mode
           
           
           def main():
@@ -495,11 +557,19 @@ jobs:
                           print(name, "BŁĄD:", str(exc))
                   return
               state = json.loads(STATE_PATH.read_text()) if STATE_PATH.exists() else {}
-              state = run(state, test=args.test or os.environ.get("SEND_TEST") == "true")
-              STATE_PATH.parent.mkdir(exist_ok=True)
-              temp = STATE_PATH.with_suffix(".tmp")
-              temp.write_text(json.dumps(state, ensure_ascii=False, indent=2))
-              temp.replace(STATE_PATH)
+              mode = requested_mode()
+              os.environ["MONITOR_MODE"] = mode
+              def check():
+                  nonlocal state
+                  state = run(state, test=args.test or os.environ.get("SEND_TEST") == "true")
+                  save_state(state)
+              if mode == "series":
+                  if dt.datetime.now(ZoneInfo("Europe/Warsaw")).date() >= STOP_DATE:
+                      telegram("Monitor WK DZIK: okres śledzenia zakończony. Seria nie została uruchomiona.")
+                      return
+                  run_series(check)
+              else:
+                  check()
           
           
           if __name__ == "__main__":
