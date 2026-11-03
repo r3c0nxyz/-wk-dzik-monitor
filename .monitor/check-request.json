@@ -1,5 +1,5 @@
 {
   "request": "Start WK DZIK series: check immediately then every 2 minutes for 30 minutes. Send all results, including no changes, and start/end confirmations to the configured Telegram.",
   "mode": "series",
-  "requested_at": "2026-11-03T14:50:28.013Z"
+  "requested_at": "2026-11-03T15:21:38.281Z"
 }
