@@ -1,5 +1,5 @@
 {
-  "request": "Start a 30-minute monitoring series using the waiting-room cookie session. Send waiting status, admission and check results to the configured Telegram.",
+  "request": "Cancel previous monitoring run and start a new 30-minute series with waiting-room session support and Telegram status.",
   "mode": "series",
-  "requested_at": "2026-11-03T15:26:09.010Z"
+  "requested_at": "2026-11-03T15:28:28.854Z"
 }
