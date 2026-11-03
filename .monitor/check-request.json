@@ -1,5 +1,5 @@
 {
   "mode": "series",
-  "requested_at": "2026-11-03T15:29:28.835Z",
-  "request": "Replace previous series now; keep waiting-room session and send results to Telegram."
+  "requested_at": "2026-11-03T16:09:04.172Z",
+  "request": "Start a fresh 30-minute series at 2-minute intervals with existing queue handling and Telegram reports."
 }
