@@ -149,12 +149,31 @@ jobs:
                       self.buffer.append(data)
           
           
+          def normalize_records(records):
+              # Only ignore the observed volatile field in Shoper's page configuration.
+              # Product JSON, prices, stock and every other setting remain monitored.
+              normalized = []
+              for record in records:
+                  if record.startswith("JSON: "):
+                      try:
+                          value = json.loads(record[6:])
+                      except ValueError:
+                          normalized.append(record)
+                          continue
+                      if (isinstance(value, dict) and "licenseData" in value
+                              and "isShoperSSOActive" in value and "contextId" in value):
+                          value.pop("licenseData")
+                          record = "JSON: " + json.dumps(value, ensure_ascii=False, sort_keys=True)
+                  normalized.append(record)
+              return sorted(set(normalized))
+          
+          
           def snapshot(html, url):
               parser = ShopParser(url)
               parser.feed(html)
               parser.flush()
               # Sorting avoids alarms caused only by product order or duplicated menus.
-              records = sorted(set(parser.records))
+              records = normalize_records(parser.records)
               joined = "\n".join(records)
               if len(joined) < 300 or not any(r.startswith("LINK: ") for r in records):
                   raise ValueError("Pusta/niepełna strona albo blokada odczytu")
@@ -309,7 +328,7 @@ jobs:
                   if url in issues:
                       send(f"✅ WK DZIK — odczyt przywrócony\n{name}\n{url}")
                       del issues[url]
-                  before = pages.get(url)
+                  before = normalize_records(pages[url]) if url in pages else None
                   if before is not None and before != current:
                       changed_count += 1
                       send(f"🐗 WK DZIK — zmiana strony\n{name}\n{url}\n"
@@ -373,5 +392,6 @@ jobs:
             git commit -m "Update public shop monitoring state"
             git push
           fi
+
 
 
