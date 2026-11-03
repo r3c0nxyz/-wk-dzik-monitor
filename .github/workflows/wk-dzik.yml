@@ -1,7 +1,7 @@
 name: WK DZIK - monitor promocji
 on:
   schedule:
-    - cron: '7,37 * * * *'
+    - cron: '7,17,27,37,47,57 * * * *'
   workflow_dispatch:
 permissions:
   contents: write
@@ -260,7 +260,7 @@ jobs:
                   send(f"🐗 WK DZIK — {'pierwszy odczyt' if first else 'test'}\n"
                        f"Odczytano {good}/{len(PAGES)} stron.\n"
                        + ("\n".join(problems) if problems else "Zapisano punkt odniesienia. Kolejne zmiany wywołają alarm.")
-                       + "\nPlan: co 30 minut; GitHub może opóźniać uruchomienia."
+                       + "\nPlan: co 10 minut; GitHub może opóźniać uruchomienia."
                        + "\nKoniec pobierania: 30.11.2026 (czas Polski).")
               state["initialized"] = True
               state["last_check"] = now.isoformat()
