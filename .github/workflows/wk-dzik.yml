@@ -168,6 +168,121 @@ jobs:
               return sorted(set(normalized))
           
           
+          
+          PRODUCT_PREFIX = "PRODUKT: "
+          
+          
+          class ProductParser(HTMLParser):
+              """Keep each Shoper product-tile's values attached to its stable product ID."""
+              def __init__(self, base):
+                  super().__init__(convert_charrefs=False)
+                  self.base = base
+                  self.active = None
+                  self.parts = []
+                  self.products = {}
+                  self.link = ""
+          
+              def handle_starttag(self, tag, attrs):
+                  a = dict(attrs)
+                  if tag == "product-tile" and self.active is None:
+                      self.active = a
+                      self.parts = []
+                      self.link = ""
+                  if self.active is not None:
+                      self.parts.append(self.get_starttag_text())
+                      if tag == "a" and a.get("href") and not self.link:
+                          url = clean_url(a["href"], self.base)
+                          if urllib.parse.urlsplit(url).hostname == "wkdzik.pl":
+                              self.link = url
+          
+              def handle_startendtag(self, tag, attrs):
+                  self.handle_starttag(tag, attrs)
+          
+              def handle_endtag(self, tag):
+                  if self.active is None:
+                      return
+                  self.parts.append("</" + tag + ">")
+                  if tag != "product-tile":
+                      return
+                  a = self.active
+                  product_id = a.get("product-id")
+                  name = re.sub(r"\s+", " ", a.get("name", "")).strip()
+                  if product_id and name and self.link:
+                      parser = ShopParser(self.base)
+                      parser.feed("<body>" + "".join(self.parts) + "</body>")
+                      parser.flush()
+                      records = parser.records
+                      if a.get("price"):
+                          records.append("CENA: " + a["price"] + " " + a.get("currency", "PLN"))
+                      key = str(product_id)
+                      previous = self.products.get(key, {}).get("records", [])
+                      self.products[key] = {"id": key, "name": name, "url": self.link,
+                                            "records": normalize_records(previous + records)}
+                  self.active = None
+                  self.parts = []
+          
+              def handle_data(self, data):
+                  if self.active is not None:
+                      self.parts.append(data)
+          
+              def handle_entityref(self, name):
+                  self.handle_data("&" + name + ";")
+          
+              def handle_charref(self, name):
+                  self.handle_data("&#" + name + ";")
+          
+          
+          def product_records(html, url):
+              parser = ProductParser(url)
+              parser.feed(html)
+              return [PRODUCT_PREFIX + json.dumps(product, ensure_ascii=False, sort_keys=True)
+                      for key, product in sorted(parser.products.items())]
+          
+          
+          def split_products(records):
+              products = {}
+              plain = []
+              for record in records:
+                  if record.startswith(PRODUCT_PREFIX):
+                      product = json.loads(record[len(PRODUCT_PREFIX):])
+                      products[product["id"]] = product
+                  else:
+                      plain.append(record)
+              return plain, products
+          
+          
+          def change_messages(before, after):
+              old_plain, old_products = split_products(before)
+              new_plain, new_products = split_products(after)
+              messages = []
+              # The first contextual snapshot only establishes product baselines.
+              # A tile missing from a listing does not prove the product is sold out.
+              if old_products:
+                  for key in sorted(old_products.keys() | new_products.keys()):
+                      old = old_products.get(key)
+                      new = new_products.get(key)
+                      product = new or old
+                      heading = "🛍 Produkt: " + product["name"] + "\n" + product["url"]
+                      if old is None:
+                          messages.append(heading + "\n\nDodano produkt do odczytanej listy. Nie musi to oznaczać nowości w sklepie.")
+                      elif new is None:
+                          messages.append(heading + "\n\nUsunięto produkt z odczytanej listy. Nie potwierdza to wyprzedania produktu.")
+                      elif old != new:
+                          old_values = old["records"] + ["NAZWA: " + old["name"], "ADRES: " + old["url"]]
+                          new_values = new["records"] + ["NAZWA: " + new["name"], "ADRES: " + new["url"]]
+                          messages.append(heading + "\n\n" + describe_change(old_values, new_values))
+                  # Report page elements separately, without repeating product changes.
+                  old_covered = {r for product in old_products.values() for r in product["records"]}
+                  new_covered = {r for product in new_products.values() for r in product["records"]}
+                  covered = old_covered | new_covered
+                  old_plain = [r for r in old_plain if r not in covered]
+                  new_plain = [r for r in new_plain if r not in covered]
+              if set(old_plain) != set(new_plain):
+                  messages.append("📄 Element strony — nie udało się jednoznacznie przypisać do produktu.\n\n"
+                                  + describe_change(old_plain, new_plain))
+              return messages
+          
+          
           def snapshot(html, url):
               parser = ShopParser(url)
               parser.feed(html)
@@ -177,7 +292,7 @@ jobs:
               joined = "\n".join(records)
               if len(joined) < 300 or not any(r.startswith("LINK: ") for r in records):
                   raise ValueError("Pusta/niepełna strona albo blokada odczytu")
-              return records
+              return normalize_records(records + product_records(html, url))
           
           
           def fetch(url):
@@ -238,7 +353,7 @@ jobs:
           
           
           def explain_change(before, after):
-              """Plain Polish summaries; never infer a price/product association from sets."""
+              """Plain Polish summaries for either a product tile or unassigned page content."""
               added = set(after) - set(before)
               removed = set(before) - set(after)
               texts = sorted(s[7:].strip() for s in added if s.startswith("TEKST: "))
@@ -266,7 +381,7 @@ jobs:
                       lines.append("Nowo widoczne wartości: " + ", ".join(prices[:6]) + ".")
                   if old_prices:
                       lines.append("Wartości, które zniknęły ze zmienionych fragmentów: " + ", ".join(old_prices[:6]) + ".")
-                  lines.append("Nie przypisuję tych kwot do konkretnego produktu — mogła zmienić się również lista ofert, a nie sama cena.")
+                  lines.append("Kwoty pochodzą ze zmienionych fragmentów; sprawdź ich opis (np. cena aktualna lub najniższa z 30 dni).")
               image_change = any(s.startswith(("OBRAZ: ", "ALT: ")) for s in added | removed)
               if image_change:
                   lines.append("🖼 Zmieniono zdjęcie, baner lub jego opis. Może to być zapowiedź promocji; sam obraz nie został przeze mnie odczytany.")
@@ -288,6 +403,8 @@ jobs:
           def describe_change(before, after):
               raw = describe_raw_change(before, after)
               explanation = explain_change(before, after)
+              if any(s.startswith(("CENA: ", "NAZWA: ", "ADRES: ")) for s in set(before) ^ set(after)):
+                  explanation = "Zmieniono dane tego produktu. Poprzednia i nowa wartość są podane wyżej.\n" + explanation
               return ("ZMIANY TECHNICZNE:\n" + raw[:1300]
                       + ("\n[…dalszy zapis skrócony]" if len(raw) > 1300 else "")
                       + "\n\nCO TO OZNACZA?\n" + explanation[:1800]
@@ -329,12 +446,12 @@ jobs:
                       send(f"✅ WK DZIK — odczyt przywrócony\n{name}\n{url}")
                       del issues[url]
                   before = normalize_records(pages[url]) if url in pages else None
-                  if before is not None and before != current:
+                  messages = change_messages(before, current) if before is not None else []
+                  if messages:
                       changed_count += 1
-                      send(f"🐗 WK DZIK — zmiana strony\n{name}\n{url}\n"
-                           f"Odczyt: {now:%d.%m.%Y %H:%M} (Polska)\n\n"
-                           + describe_change(before, current)
-                           )
+                      for message in messages:
+                          send(f"🐗 WK DZIK — zmiana strony\n{name}\n{url}\n"
+                               f"Odczyt: {now:%d.%m.%Y %H:%M} (Polska)\n\n" + message)
                   pages[url] = current
                   print(name + ": odczyt OK")
               # Confirm every completed check, including scheduled checks without changes.
@@ -401,7 +518,3 @@ jobs:
             git commit -m "Update public shop monitoring state"
             git push
           fi
-
-
-
-
