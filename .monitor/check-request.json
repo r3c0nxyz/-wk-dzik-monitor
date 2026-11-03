@@ -1,5 +1,5 @@
 {
-  "request": "Cancel previous monitoring run and start a new 30-minute series with waiting-room session support and Telegram status.",
   "mode": "series",
-  "requested_at": "2026-11-03T15:28:28.854Z"
+  "requested_at": "2026-11-03T15:29:28.835Z",
+  "request": "Replace previous series now; keep waiting-room session and send results to Telegram."
 }
