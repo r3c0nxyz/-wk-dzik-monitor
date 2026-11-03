@@ -18,7 +18,7 @@ permissions:
   contents: write
 concurrency:
   group: wk-dzik-monitor
-  cancel-in-progress: false
+  cancel-in-progress: ${{ github.event_name == 'push' && contains(github.event.head_commit.message, '[restart-series]') }}
 jobs:
   monitor:
     runs-on: ubuntu-latest
