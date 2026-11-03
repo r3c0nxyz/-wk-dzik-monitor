@@ -3,6 +3,9 @@ on:
   schedule:
     - cron: '7,17,27,37,47,57 * * * *'
   workflow_dispatch:
+  push:
+    paths:
+      - '.monitor/check-request.json'
 permissions:
   contents: write
 concurrency:
@@ -25,7 +28,7 @@ jobs:
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          SEND_TEST: ${{ github.event_name == 'workflow_dispatch' }}
+          SEND_TEST: ${{ github.event_name == 'workflow_dispatch' || github.event_name == 'push' }}
         run: |
           python - <<'PY'
           """WK DZIK monitor. Python 3.12+, standard library only."""
@@ -283,6 +286,7 @@ jobs:
               stamp = now.timestamp()
               first = not state.get("initialized")
               good = 0
+              changed_count = 0
               problems = []
               for name, url in PAGES.items():
                   try:
@@ -307,6 +311,7 @@ jobs:
                       del issues[url]
                   before = pages.get(url)
                   if before is not None and before != current:
+                      changed_count += 1
                       send(f"🐗 WK DZIK — zmiana strony\n{name}\n{url}\n"
                            f"Odczyt: {now:%d.%m.%Y %H:%M} (Polska)\n\n"
                            + describe_change(before, current)
@@ -316,12 +321,14 @@ jobs:
               if first or test:
                   send(f"🐗 WK DZIK — {'pierwszy odczyt' if first else 'test'}\n"
                        f"Odczytano {good}/{len(PAGES)} stron.\n"
+                       + (f"Wykryto zmiany na {changed_count} stronach względem ostatniego odczytu.\n" if not first else "")
                        + ("\n".join(problems) if problems else "Zapisano punkt odniesienia. Kolejne zmiany wywołają alarm.")
                        + "\nPlan: co 10 minut; GitHub może opóźniać uruchomienia."
                        + "\nKoniec pobierania: 30.11.2026 (czas Polski).")
               state["initialized"] = True
               state["last_check"] = now.isoformat()
               state["last_ok_count"] = good
+              state["last_changed_count"] = changed_count
               summary = os.environ.get("GITHUB_STEP_SUMMARY")
               if summary:
                   with open(summary, "a") as handle:
