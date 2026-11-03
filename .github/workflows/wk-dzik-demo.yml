@@ -1,0 +1,118 @@
+name: WK DZIK - test wygladu alarmu
+on:
+  push:
+    paths:
+      - '.github/workflows/wk-dzik-demo.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  demo:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Wyslij oznaczony przykladowy alarm
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          python - <<'PY'
+          import os, json, re, urllib.request
+          
+          def telegram(message):
+              token = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
+              chat = os.environ.get("TELEGRAM_CHAT_ID", "").strip()
+              if not token or not chat:
+                  raise RuntimeError("Brak sekretów TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID")
+              data = json.dumps({"chat_id": chat, "text": message[:3900],
+                                 "link_preview_options": {"is_disabled": True}}).encode()
+              req = urllib.request.Request(f"https://api.telegram.org/bot{token}/sendMessage",
+                                           data=data, headers={"Content-Type": "application/json"})
+              try:
+                  with urllib.request.urlopen(req, timeout=30) as response:
+                      result = json.load(response)
+                  if not result.get("ok"):
+                      raise RuntimeError("Telegram nie potwierdził wysłania")
+              except Exception:
+                  # Never print request URLs/exceptions containing the bot token.
+                  raise RuntimeError("Nie wysłano na Telegram. Sprawdź token, chat_id i /start u bota.") from None
+          
+          def describe_raw_change(before, after):
+              added = sorted(set(after) - set(before))
+              removed = sorted(set(before) - set(after))
+              priority = lambda s: (0 if s.startswith("TEKST:") else 1 if s.startswith("LINK:") else 2, s)
+              output = []
+              for heading, records in (("Dodano / nowa wartość:", added), ("Usunięto / poprzednia wartość:", removed)):
+                  if records:
+                      output.append(heading)
+                      output.extend("• " + s[:230] for s in sorted(records, key=priority)[:6])
+              return "\n".join(output)[:2400]
+          
+          def explain_change(before, after):
+              """Plain Polish summaries; never infer a price/product association from sets."""
+              added = set(after) - set(before)
+              removed = set(before) - set(after)
+              texts = sorted(s[7:].strip() for s in added if s.startswith("TEKST: "))
+              old_texts = sorted(s[7:].strip() for s in removed if s.startswith("TEKST: "))
+              links = sorted(s[6:] for s in added if s.startswith("LINK: "))
+              old_links = sorted(s[6:] for s in removed if s.startswith("LINK: "))
+              product_links = [u for u in links if re.search(r"/pl/p/[^/]+/\d+", u)]
+              price_re = re.compile(r"(?<![\w.,])\d+(?:[ .\u00a0]\d{3})*(?:[,.]\d{1,2})?\s*(?:zł|PLN)\b", re.I)
+              prices = sorted(set(m.group(0) for s in texts for m in price_re.finditer(s)))
+              old_prices = sorted(set(m.group(0) for s in old_texts for m in price_re.finditer(s)))
+              hints = [s for s in texts if re.search(r"czarn|promocj|drop|lodów|limitowan|start|godzin|wyprzedaż", s, re.I)]
+              lines = []
+              if hints:
+                  lines.append("📣 Zmieniono komunikat, który może dotyczyć promocji:")
+                  lines.extend('„' + s[:220] + '”' for s in hints[:2])
+              if product_links:
+                  lines.append("🛍 W odczycie pojawił się link do produktu. Może to być nowa oferta albo produkt przeniesiony na tę stronę:")
+                  lines.extend(product_links[:2])
+              elif links:
+                  lines.append("🔗 Na stronie pojawiły się nowe odnośniki. Mogą prowadzić do oferty lub nowej sekcji:")
+                  lines.extend(links[:2])
+              if prices or old_prices:
+                  lines.append("💰 Zmieniły się informacje o cenach na stronie.")
+                  if prices:
+                      lines.append("Nowo widoczne wartości: " + ", ".join(prices[:6]) + ".")
+                  if old_prices:
+                      lines.append("Wartości, które zniknęły ze zmienionych fragmentów: " + ", ".join(old_prices[:6]) + ".")
+                  lines.append("Nie przypisuję tych kwot do konkretnego produktu — mogła zmienić się również lista ofert, a nie sama cena.")
+              image_change = any(s.startswith(("OBRAZ: ", "ALT: ")) for s in added | removed)
+              if image_change:
+                  lines.append("🖼 Zmieniono zdjęcie, baner lub jego opis. Może to być zapowiedź promocji; sam obraz nie został przeze mnie odczytany.")
+              if not hints:
+                  other = [s for s in texts if not price_re.search(s)]
+                  if other:
+                      lines.append("📝 Nowy lub zmieniony tekst:")
+                      lines.extend('„' + s[:220] + '”' for s in other[:3])
+              if old_links and not links:
+                  lines.append("➖ Z tej strony zniknęły odnośniki. Nie musi to oznaczać wyprzedania produktu.")
+              if not lines:
+                  lines.append("⚙️ Zmieniono treść lub dane strony. Nie udało się ustalić, czy ma to znaczenie dla zakupów.")
+              if any(s.startswith("JSON: ") for s in added | removed) and not (prices or product_links or hints):
+                  lines.append("Zmiana obejmuje też dane osadzone w stronie; sama w sobie nie potwierdza nowej promocji.")
+              lines.append("👉 Co zrobić: otwórz link do strony podany u góry i sprawdź ofertę. To wykryta zmiana, nie potwierdzenie okazji ani dostępności.")
+              return "\n".join(lines)[:3300]
+          
+          def describe_change(before, after):
+              raw = describe_raw_change(before, after)
+              explanation = explain_change(before, after)
+              return ("ZMIANY TECHNICZNE:\n" + raw[:1300]
+                      + ("\n[…dalszy zapis skrócony]" if len(raw) > 1300 else "")
+                      + "\n\nCO TO OZNACZA?\n" + explanation[:1800]
+                      + ("\n[…wyjaśnienie skrócone]" if len(explanation) > 1800 else ""))
+          
+          before = ["TEKST: Cena 100 zł", "OBRAZ: baner-przed.jpg"]
+          after = ["TEKST: Cena 1 zł", "TEKST: CZARNA GODZINA od 18:00 — przykładowa zapowiedź", "OBRAZ: baner-po.jpg"]
+          message = ("🧪 TEST WYGLĄDU POWIADOMIENIA — dane przykładowe\n"
+                     "Kwoty i godzina poniżej są wymyślone na potrzeby testu.\n"
+                     "Strona do sprawdzenia: https://wkdzik.pl/pl/promotions\n\n"
+                     + describe_change(before, after))
+          assert len(message) < 3900
+          telegram(message)
+          print("Telegram API confirmed sending the example message.")
+          PY
