@@ -45,6 +45,7 @@ jobs:
           import argparse
           import datetime as dt
           import json
+          import http.cookiejar
           import os
           import re
           import sys
@@ -294,7 +295,31 @@ jobs:
               return messages
           
           
+          class QueuePage(ValueError):
+              """The shop returned its waiting room instead of product data."""
+              def __init__(self, wait=""):
+                  self.wait = wait
+                  super().__init__("Kolejka do sklepu" + ("; szacowany czas: " + wait if wait else ""))
+          
+          
+          def detect_queue(html):
+              parser = ShopParser("https://wkdzik.pl/")
+              parser.feed(html)
+              parser.flush()
+              text = " ".join(r[7:] for r in parser.records if r.startswith("TEKST: "))
+              text = re.sub(r"\s+", " ", text).casefold()
+              if ("jesteś teraz w kolejce" in text
+                      or ("wirtualnej kolejki" in text and "czas oczekiwania" in text)
+                      or ("you are now in line" in text and "estimated" in text)):
+                  match = re.search(r"(?:szacowany czas oczekiwania|estimated wait time)\s*(?:to|is|:)\s*(.{1,60}?)(?:[.!]|$)", text)
+                  minutes = re.search(r"var minutes = parseInt\(\s*(\d+)\s*,", html)
+                  wait = match.group(1).strip() if match else (minutes.group(1) + " min" if minutes else "")
+                  raise QueuePage(wait)
+          
+          
+          
           def snapshot(html, url):
+              detect_queue(html)
               parser = ShopParser(url)
               parser.feed(html)
               parser.flush()
@@ -306,14 +331,19 @@ jobs:
               return normalize_records(records + product_records(html, url))
           
           
-          def fetch(url):
+          COOKIE_JAR = http.cookiejar.CookieJar()
+          HTTP_SESSION = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(COOKIE_JAR))
+          SERIES_DEADLINE = None
+
+
+          def fetch_once(url):
               req = urllib.request.Request(url, headers={
                   "User-Agent": "WK-Promo-Monitor/1.0 (personal public-page change checker)",
                   "Accept": "text/html,application/xhtml+xml",
                   "Accept-Language": "pl-PL,pl;q=0.9",
               })
               try:
-                  with urllib.request.urlopen(req, timeout=30) as response:
+                  with HTTP_SESSION.open(req, timeout=30) as response:
                       if urllib.parse.urlsplit(response.url).hostname != "wkdzik.pl":
                           raise ValueError("Przekierowanie poza wkdzik.pl")
                       if "html" not in response.headers.get("Content-Type", "").lower():
@@ -323,6 +353,12 @@ jobs:
                           raise ValueError("Odpowiedź przekracza limit rozmiaru")
                       html = raw.decode(response.headers.get_content_charset() or "utf-8", errors="replace")
               except urllib.error.HTTPError as exc:
+                  try:
+                      raw = exc.read(MAX_BYTES + 1)
+                      if len(raw) <= MAX_BYTES:
+                          detect_queue(raw.decode(exc.headers.get_content_charset() or "utf-8", errors="replace"))
+                  finally:
+                      exc.close()
                   raise ValueError(f"HTTP {exc.code}; serwer odmówił odczytu lub zgłosił błąd") from None
               except urllib.error.URLError:
                   raise ValueError("Błąd połączenia ze sklepem") from None
@@ -330,6 +366,35 @@ jobs:
                   "cf-chl-", "just a moment...", "verify you are human", "<title>access denied")):
                   raise ValueError("Strona weryfikacyjna / ochrona antybotowa")
               return snapshot(html, url)
+          
+          
+          
+          def fetch(url):
+              # Keep the waiting-room cookie for all pages/checks in this workflow.
+              deadline = time.monotonic() + 600
+              if SERIES_DEADLINE is not None:
+                  deadline = min(deadline, SERIES_DEADLINE)
+              notified = False
+              last_notice = 0
+              while True:
+                  try:
+                      records = fetch_once(url)
+                      if notified:
+                          telegram("✅ WK DZIK — bot wpuszczony do sklepu\n"
+                                   "Kolejka zakończona dla sesji bota. Sprawdzam ofertę.")
+                      return records
+                  except QueuePage as exc:
+                      now = time.monotonic()
+                      if not notified or now - last_notice >= 120:
+                          telegram("⏳ WK DZIK — czekam w kolejce\n" + str(exc) + "\n"
+                                   "Zachowuję tę samą sesję i cookie kolejki. "
+                                   "Ponawiam odczyt co 20 sekund; oferta nie jest jeszcze dostępna.")
+                          notified = True
+                          last_notice = now
+                      if now + 20 >= deadline:
+                          raise
+                      time.sleep(20)
+          
           
           
           def telegram(message):
@@ -435,8 +500,12 @@ jobs:
               good = 0
               changed_count = 0
               problems = []
+              queue_error = None
+              queued = 0
               for name, url in PAGES.items():
                   try:
+                      if queue_error is not None:
+                          raise queue_error
                       current = get(url)
                   except Exception as exc:
                       # fetch() errors contain no secrets. Keep this message short.
@@ -444,6 +513,15 @@ jobs:
                       print(name + ": BŁĄD — " + error)
                       problems.append(name + ": " + error)
                       old_issue = issues.get(url, {})
+                      if isinstance(exc, QueuePage):
+                          queue_error = exc
+                          queued += 1
+                          if old_issue.get("kind") != "queue":
+                              send(f"⏳ WK DZIK — kolejka do sklepu\n{name}\n{url}\n{error}\n"
+                                   "Nie można teraz sprawdzić oferty. Zachowuję ostatni poprawny odczyt. "
+                                   "Limit oczekiwania tej próby minął. Ponowię próbę przy kolejnym sprawdzeniu.")
+                          issues[url] = {"kind": "queue", "error": error, "sent": stamp}
+                          continue
                       if not first and (old_issue.get("error") != error or
                                         stamp - old_issue.get("sent", 0) >= 43200):
                           send(f"⚠️ WK DZIK — brak odczytu\n{name}\n{url}\n{error}\n"
@@ -466,8 +544,11 @@ jobs:
                   pages[url] = current
                   print(name + ": odczyt OK")
               # Confirm every completed check, including scheduled checks without changes.
-              if first:
-                  outcome = "Zapisano pierwszy punkt odniesienia."
+              if good == 0:
+                  outcome = ("Kolejka blokuje dostęp do sklepu. Nie można ocenić zmian oferty."
+                             if queued else "Nie udało się odczytać sklepu. Nie można ocenić zmian oferty.")
+              elif first:
+                  outcome = "Zapisano pierwszy punkt odniesienia dla poprawnie odczytanych stron."
               elif changed_count:
                   outcome = f"Wykryto zmiany na {changed_count} stronach. Szczegóły wysłano osobno."
               elif good == len(PAGES):
@@ -483,7 +564,7 @@ jobs:
                    + ("\nSeria: sprawdzanie co 2 minuty przez 30 minut."
                       if os.environ.get("MONITOR_MODE") == "series" else
                       "\nPlan: co 10 minut; wykonanie może być opóźnione przez GitHub."))
-              state["initialized"] = True
+              state["initialized"] = state.get("initialized", False) or good > 0
               state["last_check"] = now.isoformat()
               state["last_ok_count"] = good
               state["last_changed_count"] = changed_count
@@ -506,7 +587,9 @@ jobs:
           def run_series(check, send=telegram, clock=time.monotonic, sleep=time.sleep,
                          duration_seconds=1800, interval_seconds=120):
               """Fixed start slots: immediately, then +2, +4, ... +28 minutes."""
+              global SERIES_DEADLINE
               started = clock()
+              SERIES_DEADLINE = started + duration_seconds
               count = 0
               send("▶️ WK DZIK — rozpoczęto serię\nPrzez 30 minut sprawdzam strony co 2 minuty. "
                    "Pierwszy odczyt teraz; kolejne wyniki, również bez zmian, wyślę na Telegram. "
@@ -528,6 +611,7 @@ jobs:
                   sleep(remaining)
               send(f"🏁 WK DZIK — seria zakończona\nWykonano {count} sprawdzeń w oknie 30 minut. "
                    "Wyniki wysłano powyżej. Zakończono tryb co 2 minuty.")
+              SERIES_DEADLINE = None
               return count
           
           
