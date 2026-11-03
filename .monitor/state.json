@@ -974,7 +974,7 @@
       "TEKST: Polityce plików cookies Shoper",
       "TEKST: Produkty w koszyku: 0. Zobacz szczegóły",
       "TEKST: Produkty w promocji",
-      "TEKST: Produkty: 41",
+      "TEKST: Produkty: 56",
       "TEKST: Przejdź do głównej treści",
       "TEKST: Rabat 11%",
       "TEKST: Rabat 13%",
@@ -1212,7 +1212,7 @@
       "TEKST: [id: 93] - nutritionalvalue_row8: Sól;0 g;0 g",
       "TEKST: [id: 93] - nutritionalvalue_row8: Sól;0,88 g;0,68 g",
       "TEKST: lub",
-      "TEKST: z 2",
+      "TEKST: z 3",
       "TEKST: ŻEL ENERGETYCZNY LEMON CYTRYNOWY DZIK®",
       "TEKST: ŻEL ENERGETYCZNY LEMON CYTRYNOWY DZIK® - 6 SZTUK"
     ],
@@ -1802,7 +1802,7 @@
   },
   "issues": {},
   "initialized": true,
-  "last_check": "2026-11-03T17:37:20.337358+01:00",
+  "last_check": "2026-11-03T19:23:55.437784+01:00",
   "last_ok_count": 3,
-  "last_changed_count": 0
+  "last_changed_count": 1
 }
