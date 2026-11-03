@@ -337,13 +337,22 @@ jobs:
                            )
                   pages[url] = current
                   print(name + ": odczyt OK")
-              if first or test:
-                  send(f"🐗 WK DZIK — {'pierwszy odczyt' if first else 'test'}\n"
-                       f"Odczytano {good}/{len(PAGES)} stron.\n"
-                       + (f"Wykryto zmiany na {changed_count} stronach względem ostatniego odczytu.\n" if not first else "")
-                       + ("\n".join(problems) if problems else "Zapisano punkt odniesienia. Kolejne zmiany wywołają alarm.")
-                       + "\nPlan: co 10 minut; GitHub może opóźniać uruchomienia."
-                       + "\nKoniec pobierania: 30.11.2026 (czas Polski).")
+              # Confirm every completed check, including scheduled checks without changes.
+              if first:
+                  outcome = "Zapisano pierwszy punkt odniesienia."
+              elif changed_count:
+                  outcome = f"Wykryto zmiany na {changed_count} stronach. Szczegóły wysłano osobno."
+              elif good == len(PAGES):
+                  outcome = "Brak nowych zmian względem poprzedniego odczytu."
+              else:
+                  outcome = "Brak wykrytych zmian w poprawnie odczytanych stronach; pozostałych nie udało się sprawdzić."
+              status_icon = "✅" if good == len(PAGES) else "⚠️"
+              send(f"{status_icon} WK DZIK — wynik sprawdzenia\n"
+                   f"Czas: {now:%d.%m.%Y %H:%M:%S} (Polska)\n"
+                   f"Odczytano {good}/{len(PAGES)} stron.\n"
+                   + outcome
+                   + ("\n\nProblemy:\n" + "\n".join(problems) if problems else "")
+                   + "\nPlan: co 10 minut; wykonanie może być opóźnione przez GitHub.")
               state["initialized"] = True
               state["last_check"] = now.isoformat()
               state["last_ok_count"] = good
@@ -392,6 +401,7 @@ jobs:
             git commit -m "Update public shop monitoring state"
             git push
           fi
+
 
 
 
