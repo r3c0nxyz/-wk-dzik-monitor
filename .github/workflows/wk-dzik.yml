@@ -1,0 +1,311 @@
+name: WK DZIK - monitor promocji
+on:
+  schedule:
+    - cron: '7,37 * * * *'
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: wk-dzik-monitor
+  cancel-in-progress: false
+jobs:
+  monitor:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - name: Pobierz stan monitora
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+      - name: Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Sprawdz sklep i wyslij alarmy
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          SEND_TEST: ${{ github.event_name == 'workflow_dispatch' }}
+        run: |
+          python - <<'PY'
+          """WK DZIK monitor. Python 3.12+, standard library only."""
+          import argparse
+          import datetime as dt
+          import json
+          import os
+          import re
+          import sys
+          import urllib.error
+          import urllib.parse
+          import urllib.request
+          from html.parser import HTMLParser
+          from pathlib import Path
+          from zoneinfo import ZoneInfo
+          
+          PAGES = {
+              "Strona gÅÃ³wna": "https://wkdzik.pl/",
+              "Promocje": "https://wkdzik.pl/pl/promotions",
+              "NowoÅci": "https://wkdzik.pl/nowosci",
+          }
+          STATE_PATH = Path(".monitor/state.json")
+          STOP_DATE = dt.date(2026, 11, 30)  # od tego dnia nie pobiera juÅ¼ sklepu
+          MAX_BYTES = 8_000_000
+          
+          
+          def clean_url(value, base):
+              url = urllib.parse.urljoin(base, value)
+              p = urllib.parse.urlsplit(url)
+              if p.scheme not in ("https", "http"):
+                  return ""
+              query = [(k, v) for k, v in urllib.parse.parse_qsl(p.query)
+                       if not k.lower().startswith("utm_") and k.lower() not in ("fbclid", "gclid")]
+              return urllib.parse.urlunsplit((p.scheme, p.netloc, p.path,
+                                             urllib.parse.urlencode(query), ""))
+          
+          
+          class ShopParser(HTMLParser):
+              """Text (also CSS-hidden), public links/images and embedded JSON data.
+          
+              Ignore executable JS, analytics, CSS, navigation and volatile HTML attrs.
+              This is deliberately NOT a fingerprint of every byte of HTML.
+              """
+              def __init__(self, base):
+                  super().__init__(convert_charrefs=True)
+                  self.base = base
+                  self.skip = []
+                  self.records = []
+                  self.json_script = False
+                  self.script_text = []
+                  self.buffer = []
+                  self.body = False
+          
+              def flush(self):
+                  text = re.sub(r"\s+", " ", "".join(self.buffer)).strip()
+                  self.buffer = []
+                  if text:
+                      self.records.append("TEKST: " + text)
+          
+              def handle_starttag(self, tag, attrs):
+                  a = dict(attrs)
+                  if tag == "body":
+                      self.body = True
+                  if not self.body:
+                      return
+                  if self.skip:
+                      if tag == self.skip[-1] and tag not in ("script", "style"):
+                          self.skip.append(tag)
+                      return
+                  if tag in ("script", "style", "nav", "footer", "noscript"):
+                      self.flush()
+                      self.skip.append(tag)
+                      self.json_script = tag == "script" and a.get("type", "").lower() in (
+                          "application/ld+json", "application/json")
+                      self.script_text = []
+                      return
+                  if tag in ("div", "p", "li", "section", "article", "br", "h1", "h2", "h3", "a"):
+                      self.flush()
+                  if tag == "a" and a.get("href"):
+                      url = clean_url(a["href"], self.base)
+                      if urllib.parse.urlsplit(url).hostname == "wkdzik.pl":
+                          self.records.append("LINK: " + url)
+                  if tag in ("img", "source"):
+                      # Store image URL and alt rather than unstable sizes/element IDs.
+                      for key in ("src", "data-src", "srcset", "data-srcset"):
+                          for part in a.get(key, "").split(","):
+                              value = part.strip().split(" ")[0]
+                              if value and not value.startswith("data:"):
+                                  url = clean_url(value, self.base)
+                                  if url:
+                                      self.records.append("OBRAZ: " + url)
+                      if a.get("alt"):
+                          self.records.append("ALT: " + a["alt"])
+          
+              def handle_endtag(self, tag):
+                  if self.skip:
+                      if tag == self.skip[-1]:
+                          self.skip.pop()
+                          if not self.skip and self.json_script:
+                              try:
+                                  value = json.loads("".join(self.script_text))
+                                  self.records.append("JSON: " + json.dumps(
+                                      value, ensure_ascii=False, sort_keys=True))
+                              except ValueError:
+                                  pass
+                              self.json_script = False
+                      return
+                  if tag in ("div", "p", "li", "section", "article", "h1", "h2", "h3", "a", "body"):
+                      self.flush()
+                  if tag == "body":
+                      self.body = False
+          
+              def handle_data(self, data):
+                  if self.skip:
+                      if self.json_script and self.skip[-1] == "script":
+                          self.script_text.append(data)
+                  elif self.body:
+                      self.buffer.append(data)
+          
+          
+          def snapshot(html, url):
+              parser = ShopParser(url)
+              parser.feed(html)
+              parser.flush()
+              # Sorting avoids alarms caused only by product order or duplicated menus.
+              records = sorted(set(parser.records))
+              joined = "\n".join(records)
+              if len(joined) < 300 or not any(r.startswith("LINK: ") for r in records):
+                  raise ValueError("Pusta/niepeÅna strona albo blokada odczytu")
+              return records
+          
+          
+          def fetch(url):
+              req = urllib.request.Request(url, headers={
+                  "User-Agent": "WK-Promo-Monitor/1.0 (personal public-page change checker)",
+                  "Accept": "text/html,application/xhtml+xml",
+                  "Accept-Language": "pl-PL,pl;q=0.9",
+              })
+              try:
+                  with urllib.request.urlopen(req, timeout=30) as response:
+                      if urllib.parse.urlsplit(response.url).hostname != "wkdzik.pl":
+                          raise ValueError("Przekierowanie poza wkdzik.pl")
+                      if "html" not in response.headers.get("Content-Type", "").lower():
+                          raise ValueError("OdpowiedÅº nie jest stronÄ HTML")
+                      raw = response.read(MAX_BYTES + 1)
+                      if len(raw) > MAX_BYTES:
+                          raise ValueError("OdpowiedÅº przekracza limit rozmiaru")
+                      html = raw.decode(response.headers.get_content_charset() or "utf-8", errors="replace")
+              except urllib.error.HTTPError as exc:
+                  raise ValueError(f"HTTP {exc.code}; serwer odmÃ³wiÅ odczytu lub zgÅosiÅ bÅÄd") from None
+              except urllib.error.URLError:
+                  raise ValueError("BÅÄd poÅÄczenia ze sklepem") from None
+              if any(marker in html.lower() for marker in (
+                  "cf-chl-", "just a moment...", "verify you are human", "<title>access denied")):
+                  raise ValueError("Strona weryfikacyjna / ochrona antybotowa")
+              return snapshot(html, url)
+          
+          
+          def telegram(message):
+              token = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
+              chat = os.environ.get("TELEGRAM_CHAT_ID", "").strip()
+              if not token or not chat:
+                  raise RuntimeError("Brak sekretÃ³w TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID")
+              data = json.dumps({"chat_id": chat, "text": message[:3900],
+                                 "link_preview_options": {"is_disabled": True}}).encode()
+              req = urllib.request.Request(f"https://api.telegram.org/bot{token}/sendMessage",
+                                           data=data, headers={"Content-Type": "application/json"})
+              try:
+                  with urllib.request.urlopen(req, timeout=30) as response:
+                      result = json.load(response)
+                  if not result.get("ok"):
+                      raise RuntimeError("Telegram nie potwierdziÅ wysÅania")
+              except Exception:
+                  # Never print request URLs/exceptions containing the bot token.
+                  raise RuntimeError("Nie wysÅano na Telegram. SprawdÅº token, chat_id i /start u bota.") from None
+          
+          
+          def describe_change(before, after):
+              added = sorted(set(after) - set(before))
+              removed = sorted(set(before) - set(after))
+              priority = lambda s: (0 if s.startswith("TEKST:") else 1 if s.startswith("LINK:") else 2, s)
+              output = []
+              for heading, records in (("Dodano / nowa wartoÅÄ:", added), ("UsuniÄto / poprzednia wartoÅÄ:", removed)):
+                  if records:
+                      output.append(heading)
+                      output.extend("â¢ " + s[:230] for s in sorted(records, key=priority)[:6])
+              return "\n".join(output)[:2400]
+          
+          
+          def run(state, get=fetch, send=telegram, now=None, test=False):
+              now = now or dt.datetime.now(ZoneInfo("Europe/Warsaw"))
+              if now.date() >= STOP_DATE:
+                  if test:
+                      send("Monitor WK DZIK: okres Åledzenia zakoÅczony. ZmieÅ STOP_DATE, jeÅli chcesz go przedÅuÅ¼yÄ.")
+                  return state
+              pages = state.setdefault("pages", {})
+              issues = state.setdefault("issues", {})
+              stamp = now.timestamp()
+              first = not state.get("initialized")
+              good = 0
+              problems = []
+              for name, url in PAGES.items():
+                  try:
+                      current = get(url)
+                  except Exception as exc:
+                      # fetch() errors contain no secrets. Keep this message short.
+                      error = str(exc)[:180]
+                      print(name + ": BÅÄD â " + error)
+                      problems.append(name + ": " + error)
+                      old_issue = issues.get(url, {})
+                      if not first and (old_issue.get("error") != error or
+                                        stamp - old_issue.get("sent", 0) >= 43200):
+                          send(f"â ï¸ WK DZIK â brak odczytu\n{name}\n{url}\n{error}\n"
+                               "Ta strona nie jest obecnie monitorowana. Ponowna prÃ³ba przy nastÄpnym uruchomieniu.")
+                      issues[url] = {"error": error, "sent": stamp if first or
+                                     old_issue.get("error") != error or stamp - old_issue.get("sent", 0) >= 43200
+                                     else old_issue["sent"]}
+                      continue  # Preserve last good snapshot, never use an error as baseline.
+                  good += 1
+                  if url in issues:
+                      send(f"â WK DZIK â odczyt przywrÃ³cony\n{name}\n{url}")
+                      del issues[url]
+                  before = pages.get(url)
+                  if before is not None and before != current:
+                      send(f"ð WK DZIK â zmiana strony\n{name}\n{url}\n"
+                           f"Odczyt: {now:%d.%m.%Y %H:%M} (Polska)\n\n"
+                           + describe_change(before, current)
+                           + "\n\nZmiana nie musi oznaczaÄ promocji. SprawdÅº link.")
+                  pages[url] = current
+                  print(name + ": odczyt OK")
+              if first or test:
+                  send(f"ð WK DZIK â {'pierwszy odczyt' if first else 'test'}\n"
+                       f"Odczytano {good}/{len(PAGES)} stron.\n"
+                       + ("\n".join(problems) if problems else "Zapisano punkt odniesienia. Kolejne zmiany wywoÅajÄ alarm.")
+                       + "\nPlan: co 30 minut; GitHub moÅ¼e opÃ³ÅºniaÄ uruchomienia."
+                       + "\nKoniec pobierania: 30.11.2026 (czas Polski).")
+              state["initialized"] = True
+              state["last_check"] = now.isoformat()
+              state["last_ok_count"] = good
+              summary = os.environ.get("GITHUB_STEP_SUMMARY")
+              if summary:
+                  with open(summary, "a") as handle:
+                      handle.write(f"Odczytano **{good}/3** stron. Czas: {now.isoformat()}\n\n")
+                      handle.write("\n".join(problems) + "\n")
+              return state
+          
+          
+          def main():
+              p = argparse.ArgumentParser()
+              p.add_argument("--test", action="store_true", help="WyÅlij teÅ¼ wiadomoÅÄ testowÄ")
+              p.add_argument("--probe", action="store_true", help="Odczytaj strony bez Telegrama i zapisu")
+              args = p.parse_args()
+              if args.probe:
+                  for name, url in PAGES.items():
+                      try:
+                          print(name, "OK, rekordÃ³w:", len(fetch(url)))
+                      except Exception as exc:
+                          print(name, "BÅÄD:", str(exc))
+                  return
+              state = json.loads(STATE_PATH.read_text()) if STATE_PATH.exists() else {}
+              state = run(state, test=args.test or os.environ.get("SEND_TEST") == "true")
+              STATE_PATH.parent.mkdir(exist_ok=True)
+              temp = STATE_PATH.with_suffix(".tmp")
+              temp.write_text(json.dumps(state, ensure_ascii=False, indent=2))
+              temp.replace(STATE_PATH)
+          
+          
+          if __name__ == "__main__":
+              try:
+                  main()
+              except Exception:
+                  print("BÅÄD: sprawdÅº sekrety Telegrama i plik stanu. Stan nie zostaÅ zapisany.", file=sys.stderr)
+                  sys.exit(1)
+          PY
+      - name: Zapisz punkt odniesienia
+        run: |
+          git config user.name "WK DZIK Monitor"
+          git config user.email "wk-monitor@users.noreply.github.com"
+          git add .monitor/state.json
+          if ! git diff --cached --quiet; then
+            git commit -m "Update public shop monitoring state"
+            git push
+          fi
