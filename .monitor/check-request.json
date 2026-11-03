@@ -1,5 +1,5 @@
 {
-  "request": "Start WK DZIK series: check immediately then every 2 minutes for 30 minutes. Send all results, including no changes, and start/end confirmations to the configured Telegram.",
+  "request": "Start a 30-minute monitoring series using the waiting-room cookie session. Send waiting status, admission and check results to the configured Telegram.",
   "mode": "series",
-  "requested_at": "2026-11-03T15:21:38.281Z"
+  "requested_at": "2026-11-03T15:26:09.010Z"
 }
