@@ -934,6 +934,7 @@
       "TEKST: PILL BOX - PUDEŁKO NA TABLETKI DZIK®",
       "TEKST: Pliki cookies i pokrewne im technologie umożliwiają poprawne działanie strony i pomagają nam dostosować ofertę do Twoich potrzeb. Możesz zaakceptować wykorzystanie przez nas wszystkich tych plików i przejść do sklepu lub dostosować użycie plików do swoich preferencji, wybierając opcję \"Dostosuj zgody\".",
       "TEKST: Polityce plików cookies Shoper",
+      "TEKST: Powiadom o dostępności Anuluj powiadomienie",
       "TEKST: Produkty w koszyku: 0. Zobacz szczegóły",
       "TEKST: Produkty w promocji",
       "TEKST: Produkty: 56",
@@ -1783,7 +1784,7 @@
   },
   "issues": {},
   "initialized": true,
-  "last_check": "2026-11-03T11:26:04.538004+01:00",
+  "last_check": "2026-11-03T12:15:07.750116+01:00",
   "last_ok_count": 3,
-  "last_changed_count": 0
+  "last_changed_count": 1
 }
