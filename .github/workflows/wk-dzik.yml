@@ -43,12 +43,12 @@ jobs:
           from zoneinfo import ZoneInfo
           
           PAGES = {
-              "Strona gÅÃ³wna": "https://wkdzik.pl/",
+              "Strona główna": "https://wkdzik.pl/",
               "Promocje": "https://wkdzik.pl/pl/promotions",
-              "NowoÅci": "https://wkdzik.pl/nowosci",
+              "Nowości": "https://wkdzik.pl/nowosci",
           }
           STATE_PATH = Path(".monitor/state.json")
-          STOP_DATE = dt.date(2026, 11, 30)  # od tego dnia nie pobiera juÅ¼ sklepu
+          STOP_DATE = dt.date(2026, 11, 30)  # od tego dnia nie pobiera już sklepu
           MAX_BYTES = 8_000_000
           
           
@@ -154,7 +154,7 @@ jobs:
               records = sorted(set(parser.records))
               joined = "\n".join(records)
               if len(joined) < 300 or not any(r.startswith("LINK: ") for r in records):
-                  raise ValueError("Pusta/niepeÅna strona albo blokada odczytu")
+                  raise ValueError("Pusta/niepełna strona albo blokada odczytu")
               return records
           
           
@@ -169,15 +169,15 @@ jobs:
                       if urllib.parse.urlsplit(response.url).hostname != "wkdzik.pl":
                           raise ValueError("Przekierowanie poza wkdzik.pl")
                       if "html" not in response.headers.get("Content-Type", "").lower():
-                          raise ValueError("OdpowiedÅº nie jest stronÄ HTML")
+                          raise ValueError("Odpowiedź nie jest stroną HTML")
                       raw = response.read(MAX_BYTES + 1)
                       if len(raw) > MAX_BYTES:
-                          raise ValueError("OdpowiedÅº przekracza limit rozmiaru")
+                          raise ValueError("Odpowiedź przekracza limit rozmiaru")
                       html = raw.decode(response.headers.get_content_charset() or "utf-8", errors="replace")
               except urllib.error.HTTPError as exc:
-                  raise ValueError(f"HTTP {exc.code}; serwer odmÃ³wiÅ odczytu lub zgÅosiÅ bÅÄd") from None
+                  raise ValueError(f"HTTP {exc.code}; serwer odmówił odczytu lub zgłosił błąd") from None
               except urllib.error.URLError:
-                  raise ValueError("BÅÄd poÅÄczenia ze sklepem") from None
+                  raise ValueError("Błąd połączenia ze sklepem") from None
               if any(marker in html.lower() for marker in (
                   "cf-chl-", "just a moment...", "verify you are human", "<title>access denied")):
                   raise ValueError("Strona weryfikacyjna / ochrona antybotowa")
@@ -188,7 +188,7 @@ jobs:
               token = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
               chat = os.environ.get("TELEGRAM_CHAT_ID", "").strip()
               if not token or not chat:
-                  raise RuntimeError("Brak sekretÃ³w TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID")
+                  raise RuntimeError("Brak sekretów TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID")
               data = json.dumps({"chat_id": chat, "text": message[:3900],
                                  "link_preview_options": {"is_disabled": True}}).encode()
               req = urllib.request.Request(f"https://api.telegram.org/bot{token}/sendMessage",
@@ -197,10 +197,10 @@ jobs:
                   with urllib.request.urlopen(req, timeout=30) as response:
                       result = json.load(response)
                   if not result.get("ok"):
-                      raise RuntimeError("Telegram nie potwierdziÅ wysÅania")
+                      raise RuntimeError("Telegram nie potwierdził wysłania")
               except Exception:
                   # Never print request URLs/exceptions containing the bot token.
-                  raise RuntimeError("Nie wysÅano na Telegram. SprawdÅº token, chat_id i /start u bota.") from None
+                  raise RuntimeError("Nie wysłano na Telegram. Sprawdź token, chat_id i /start u bota.") from None
           
           
           def describe_change(before, after):
@@ -208,10 +208,10 @@ jobs:
               removed = sorted(set(before) - set(after))
               priority = lambda s: (0 if s.startswith("TEKST:") else 1 if s.startswith("LINK:") else 2, s)
               output = []
-              for heading, records in (("Dodano / nowa wartoÅÄ:", added), ("UsuniÄto / poprzednia wartoÅÄ:", removed)):
+              for heading, records in (("Dodano / nowa wartość:", added), ("Usunięto / poprzednia wartość:", removed)):
                   if records:
                       output.append(heading)
-                      output.extend("â¢ " + s[:230] for s in sorted(records, key=priority)[:6])
+                      output.extend("• " + s[:230] for s in sorted(records, key=priority)[:6])
               return "\n".join(output)[:2400]
           
           
@@ -219,7 +219,7 @@ jobs:
               now = now or dt.datetime.now(ZoneInfo("Europe/Warsaw"))
               if now.date() >= STOP_DATE:
                   if test:
-                      send("Monitor WK DZIK: okres Åledzenia zakoÅczony. ZmieÅ STOP_DATE, jeÅli chcesz go przedÅuÅ¼yÄ.")
+                      send("Monitor WK DZIK: okres śledzenia zakończony. Zmień STOP_DATE, jeśli chcesz go przedłużyć.")
                   return state
               pages = state.setdefault("pages", {})
               issues = state.setdefault("issues", {})
@@ -233,34 +233,34 @@ jobs:
                   except Exception as exc:
                       # fetch() errors contain no secrets. Keep this message short.
                       error = str(exc)[:180]
-                      print(name + ": BÅÄD â " + error)
+                      print(name + ": BŁĄD — " + error)
                       problems.append(name + ": " + error)
                       old_issue = issues.get(url, {})
                       if not first and (old_issue.get("error") != error or
                                         stamp - old_issue.get("sent", 0) >= 43200):
-                          send(f"â ï¸ WK DZIK â brak odczytu\n{name}\n{url}\n{error}\n"
-                               "Ta strona nie jest obecnie monitorowana. Ponowna prÃ³ba przy nastÄpnym uruchomieniu.")
+                          send(f"⚠️ WK DZIK — brak odczytu\n{name}\n{url}\n{error}\n"
+                               "Ta strona nie jest obecnie monitorowana. Ponowna próba przy następnym uruchomieniu.")
                       issues[url] = {"error": error, "sent": stamp if first or
                                      old_issue.get("error") != error or stamp - old_issue.get("sent", 0) >= 43200
                                      else old_issue["sent"]}
                       continue  # Preserve last good snapshot, never use an error as baseline.
                   good += 1
                   if url in issues:
-                      send(f"â WK DZIK â odczyt przywrÃ³cony\n{name}\n{url}")
+                      send(f"✅ WK DZIK — odczyt przywrócony\n{name}\n{url}")
                       del issues[url]
                   before = pages.get(url)
                   if before is not None and before != current:
-                      send(f"ð WK DZIK â zmiana strony\n{name}\n{url}\n"
+                      send(f"🐗 WK DZIK — zmiana strony\n{name}\n{url}\n"
                            f"Odczyt: {now:%d.%m.%Y %H:%M} (Polska)\n\n"
                            + describe_change(before, current)
-                           + "\n\nZmiana nie musi oznaczaÄ promocji. SprawdÅº link.")
+                           + "\n\nZmiana nie musi oznaczać promocji. Sprawdź link.")
                   pages[url] = current
                   print(name + ": odczyt OK")
               if first or test:
-                  send(f"ð WK DZIK â {'pierwszy odczyt' if first else 'test'}\n"
+                  send(f"🐗 WK DZIK — {'pierwszy odczyt' if first else 'test'}\n"
                        f"Odczytano {good}/{len(PAGES)} stron.\n"
-                       + ("\n".join(problems) if problems else "Zapisano punkt odniesienia. Kolejne zmiany wywoÅajÄ alarm.")
-                       + "\nPlan: co 30 minut; GitHub moÅ¼e opÃ³ÅºniaÄ uruchomienia."
+                       + ("\n".join(problems) if problems else "Zapisano punkt odniesienia. Kolejne zmiany wywołają alarm.")
+                       + "\nPlan: co 30 minut; GitHub może opóźniać uruchomienia."
                        + "\nKoniec pobierania: 30.11.2026 (czas Polski).")
               state["initialized"] = True
               state["last_check"] = now.isoformat()
@@ -275,15 +275,15 @@ jobs:
           
           def main():
               p = argparse.ArgumentParser()
-              p.add_argument("--test", action="store_true", help="WyÅlij teÅ¼ wiadomoÅÄ testowÄ")
+              p.add_argument("--test", action="store_true", help="Wyślij też wiadomość testową")
               p.add_argument("--probe", action="store_true", help="Odczytaj strony bez Telegrama i zapisu")
               args = p.parse_args()
               if args.probe:
                   for name, url in PAGES.items():
                       try:
-                          print(name, "OK, rekordÃ³w:", len(fetch(url)))
+                          print(name, "OK, rekordów:", len(fetch(url)))
                       except Exception as exc:
-                          print(name, "BÅÄD:", str(exc))
+                          print(name, "BŁĄD:", str(exc))
                   return
               state = json.loads(STATE_PATH.read_text()) if STATE_PATH.exists() else {}
               state = run(state, test=args.test or os.environ.get("SEND_TEST") == "true")
@@ -297,7 +297,7 @@ jobs:
               try:
                   main()
               except Exception:
-                  print("BÅÄD: sprawdÅº sekrety Telegrama i plik stanu. Stan nie zostaÅ zapisany.", file=sys.stderr)
+                  print("BŁĄD: sprawdź sekrety Telegrama i plik stanu. Stan nie został zapisany.", file=sys.stderr)
                   sys.exit(1)
           PY
       - name: Zapisz punkt odniesienia
@@ -309,3 +309,4 @@ jobs:
             git commit -m "Update public shop monitoring state"
             git push
           fi
+
