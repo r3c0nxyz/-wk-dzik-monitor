@@ -1,5 +1,5 @@
 {
   "mode": "series",
-  "requested_at": "2026-11-03T16:09:04.172Z",
-  "request": "Start a fresh 30-minute series at 2-minute intervals with existing queue handling and Telegram reports."
+  "requested_at": "2026-11-04T15:48:02.088Z",
+  "request": "Start a 60-minute series with one-minute checks and Telegram reports."
 }
