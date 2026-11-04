@@ -22,7 +22,7 @@ concurrency:
 jobs:
   monitor:
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 75
     steps:
       - name: Pobierz stan monitora
         uses: actions/checkout@v4
@@ -561,7 +561,7 @@ jobs:
                    f"Odczytano {good}/{len(PAGES)} stron.\n"
                    + outcome
                    + ("\n\nProblemy:\n" + "\n".join(problems) if problems else "")
-                   + ("\nSeria: sprawdzanie co 2 minuty przez 30 minut."
+                   + ("\nSeria: sprawdzanie co minutę przez 60 minut."
                       if os.environ.get("MONITOR_MODE") == "series" else
                       "\nPlan: co 10 minut; wykonanie może być opóźnione przez GitHub."))
               state["initialized"] = state.get("initialized", False) or good > 0
@@ -585,13 +585,13 @@ jobs:
           
           
           def run_series(check, send=telegram, clock=time.monotonic, sleep=time.sleep,
-                         duration_seconds=1800, interval_seconds=120):
-              """Fixed start slots: immediately, then +2, +4, ... +28 minutes."""
+                         duration_seconds=3600, interval_seconds=60):
+              """Fixed start slots: immediately, then +1, +2, ... +59 minutes."""
               global SERIES_DEADLINE
               started = clock()
               SERIES_DEADLINE = started + duration_seconds
               count = 0
-              send("▶️ WK DZIK — rozpoczęto serię\nPrzez 30 minut sprawdzam strony co 2 minuty. "
+              send("▶️ WK DZIK — rozpoczęto serię\nPrzez 60 minut sprawdzam strony co minutę. "
                    "Pierwszy odczyt teraz; kolejne wyniki, również bez zmian, wyślę na Telegram. "
                    "Przy zmianach podam produkt i szczegóły.")
               for slot in range(0, duration_seconds, interval_seconds):
@@ -609,8 +609,8 @@ jobs:
               remaining = started + duration_seconds - clock()
               if remaining > 0:
                   sleep(remaining)
-              send(f"🏁 WK DZIK — seria zakończona\nWykonano {count} sprawdzeń w oknie 30 minut. "
-                   "Wyniki wysłano powyżej. Zakończono tryb co 2 minuty.")
+              send(f"🏁 WK DZIK — seria zakończona\nWykonano {count} sprawdzeń w oknie 60 minut. "
+                   "Wyniki wysłano powyżej. Zakończono tryb co minutę.")
               SERIES_DEADLINE = None
               return count
           
