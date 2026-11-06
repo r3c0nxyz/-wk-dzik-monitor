@@ -82,7 +82,6 @@
       "JSON: {\"isGTM\": \"0\", \"trackingId\": \"G-4K7YTVYRHN\"}",
       "JSON: {\"nextSumStepAvailable\": \"Dodaj jeszcze {brakująca_kwota} (próg: {kwota_do_osiągnięcia}), aby otrzymać kolejny gratis\", \"nextSumStepAvailableAfterDelete\": \"Dodaj jeszcze {brakująca_kwota} (próg: {kwota_do_osiągnięcia}) i usuń część gratisów, aby dodać ten gratis\", \"nextSumStepUnavailable\": \"Nie możesz dodać kolejnego gratisu. Usuń obecne gratisy, aby wybrać inny\", \"nextSumStepUnavailableFreeInBasket\": \"Gratis jest już w koszyku\", \"skipLimitInBasket\": \"Gratis jest już w koszyku\", \"sumTooLow\": \"Dodaj jeszcze {brakująca_kwota}, aby otrzymać gratis (próg: {kwota_do_osiągnięcia})\"}",
       "JSON: {\"pixelId\": \"1672650150656572\"}",
-      "LINK: https://wkdzik.pl",
       "LINK: https://wkdzik.pl/",
       "LINK: https://wkdzik.pl/akcesoria/akcesoria-treningowe",
       "LINK: https://wkdzik.pl/aktywnosc-fizyczna-jaki-rodzaj-treningu-bedzie-dla-ciebie-najlepszy",
@@ -1785,7 +1784,7 @@
   },
   "issues": {},
   "initialized": true,
-  "last_check": "2026-11-06T09:31:52.981387+01:00",
+  "last_check": "2026-11-06T17:13:59.953369+01:00",
   "last_ok_count": 3,
-  "last_changed_count": 3
+  "last_changed_count": 1
 }
