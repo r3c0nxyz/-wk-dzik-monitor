@@ -923,7 +923,7 @@
       "TEKST: Powiadom o dostępności Anuluj powiadomienie",
       "TEKST: Produkty w koszyku: 0. Zobacz szczegóły",
       "TEKST: Produkty w promocji",
-      "TEKST: Produkty: 318",
+      "TEKST: Produkty: 315",
       "TEKST: Przejdź do głównej treści",
       "TEKST: Rabat 11%",
       "TEKST: Rabat 12%",
@@ -1850,7 +1850,7 @@
   },
   "issues": {},
   "initialized": true,
-  "last_check": "2026-11-21T22:13:03.906445+01:00",
+  "last_check": "2026-11-22T02:24:04.196869+01:00",
   "last_ok_count": 3,
-  "last_changed_count": 0
+  "last_changed_count": 1
 }
